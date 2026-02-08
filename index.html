@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>🎲 Dice Tower</title>
+  <meta name="description" content="3D Physics Dice Roller for TRPG">
+  <meta name="theme-color" content="#1a1a2e">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎲</text></svg>">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --accent: #e94560;
+      --accent2: #0f3460;
+      --text: #eee;
+      --text-dim: #8892b0;
+      --gold: #f0c040;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #canvas-container {
+      flex: 1;
+      position: relative;
+      cursor: grab;
+      min-height: 0;
+    }
+
+    #canvas-container:active { cursor: grabbing; }
+
+    canvas { display: block; width: 100%; height: 100%; }
+
+    /* Result overlay */
+    #result-overlay {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(22, 33, 62, 0.92);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(233, 69, 96, 0.3);
+      border-radius: 16px;
+      padding: 10px 28px;
+      text-align: center;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    #result-overlay.visible { opacity: 1; }
+
+    #result-total {
+      font-size: 2.5rem;
+      font-weight: 800;
+      color: var(--gold);
+      line-height: 1.1;
+    }
+
+    #result-detail {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    /* Critical animation */
+    @keyframes critPulse {
+      0%, 100% { transform: translateX(-50%) scale(1); }
+      50% { transform: translateX(-50%) scale(1.1); }
+    }
+
+    #result-overlay.critical {
+      animation: critPulse 0.35s ease 3;
+      border-color: var(--gold);
+      box-shadow: 0 0 40px rgba(240, 192, 64, 0.4);
+    }
+
+    #result-overlay.fumble {
+      animation: critPulse 0.35s ease 3;
+      border-color: var(--accent);
+      box-shadow: 0 0 40px rgba(233, 69, 96, 0.4);
+    }
+
+    .nat20 { color: var(--gold) !important; text-shadow: 0 0 10px rgba(240, 192, 64, 0.6); }
+    .nat1 { color: var(--accent) !important; text-shadow: 0 0 10px rgba(233, 69, 96, 0.6); }
+
+    /* Bottom panel */
+    #bottom-panel {
+      background: var(--surface);
+      border-top: 1px solid rgba(255,255,255,0.08);
+      padding: 8px 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      z-index: 20;
+    }
+
+    /* Presets */
+    #preset-row {
+      display: flex;
+      gap: 4px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .preset-btn {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      color: var(--text-dim);
+      font-size: 0.7rem;
+      padding: 3px 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .preset-btn:hover { color: var(--text); border-color: var(--accent); }
+    .preset-btn:active { transform: scale(0.95); }
+
+    /* Dice selector row */
+    #dice-selector {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .dice-btn {
+      position: relative;
+      background: var(--accent2);
+      border: 2px solid transparent;
+      border-radius: 10px;
+      color: var(--text);
+      font-weight: 700;
+      padding: 7px 10px;
+      min-width: 50px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+    }
+
+    .dice-btn:hover { background: rgba(15, 52, 96, 0.8); }
+    .dice-btn:active { transform: scale(0.95); }
+    .dice-btn.selected { border-color: var(--accent); background: rgba(233, 69, 96, 0.15); }
+
+    .dice-btn .count {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: var(--accent);
+      color: white;
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      font-size: 0.7rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+    }
+
+    .dice-btn .count.hidden { display: none; }
+    .dice-icon { font-size: 1.1rem; line-height: 1; }
+    .dice-label { font-size: 0.65rem; color: var(--text-dim); }
+
+    /* Action row */
+    #action-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #modifier-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 4px 8px;
+    }
+
+    #modifier-group label {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    #modifier {
+      width: 48px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-align: center;
+      padding: 4px;
+      outline: none;
+    }
+
+    #modifier:focus { border-color: var(--accent); }
+
+    #roll-btn {
+      background: var(--accent);
+      border: none;
+      border-radius: 12px;
+      color: white;
+      font-size: 1rem;
+      font-weight: 800;
+      padding: 10px 32px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      letter-spacing: 0.5px;
+    }
+
+    #roll-btn:hover { background: #d63851; transform: translateY(-1px); }
+    #roll-btn:active { transform: scale(0.97); }
+    #roll-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    #clear-btn {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 8px;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      padding: 6px 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    #clear-btn:hover { border-color: var(--accent); color: var(--text); }
+
+    /* History bar */
+    #history-bar {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 2px 0;
+      scrollbar-width: none;
+      min-height: 24px;
+    }
+
+    #history-bar::-webkit-scrollbar { display: none; }
+
+    .history-item {
+      flex-shrink: 0;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 3px 10px;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      white-space: nowrap;
+      cursor: default;
+    }
+
+    .history-item .hist-total {
+      font-weight: 800;
+      color: var(--gold);
+      font-size: 0.85rem;
+    }
+
+    /* Shake hint */
+    #shake-hint {
+      position: absolute;
+      bottom: 8px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      opacity: 0.5;
+      pointer-events: none;
+      transition: opacity 1s;
+    }
+
+    /* Loading screen */
+    #loading {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+      flex-direction: column;
+      gap: 16px;
+      transition: opacity 0.5s;
+    }
+
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading .emoji { font-size: 3rem; animation: bounce 1s ease infinite; }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-12px); }
+    }
+
+    #loading p { color: var(--text-dim); font-size: 0.9rem; }
+
+    /* Mobile adjustments */
+    @media (max-height: 600px) {
+      #bottom-panel { padding: 6px 10px 8px; gap: 5px; }
+      .dice-btn { padding: 5px 8px; min-width: 44px; }
+      #roll-btn { padding: 8px 24px; font-size: 0.9rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="emoji">🎲</div>
+    <p>Loading Dice Tower...</p>
+  </div>
+
+  <div id="canvas-container">
+    <canvas id="scene"></canvas>
+    <div id="result-overlay">
+      <div id="result-total"></div>
+      <div id="result-detail"></div>
+    </div>
+    <div id="shake-hint">드래그로 시점 회전</div>
+  </div>
+
+  <div id="bottom-panel">
+    <div id="preset-row">
+      <button class="preset-btn" data-preset="1d20">1d20</button>
+      <button class="preset-btn" data-preset="1d20+5">1d20+5</button>
+      <button class="preset-btn" data-preset="2d6">2d6</button>
+      <button class="preset-btn" data-preset="1d8+3">1d8+3</button>
+      <button class="preset-btn" data-preset="4d6">4d6</button>
+      <button class="preset-btn" data-preset="2d10">2d10</button>
+      <button class="preset-btn" data-preset="8d6">8d6 🔥</button>
+    </div>
+
+    <div id="dice-selector">
+      <button class="dice-btn" data-die="4">
+        <span class="count hidden">0</span>
+        <span class="dice-icon">▲</span>
+        <span class="dice-label">D4</span>
+      </button>
+      <button class="dice-btn" data-die="6">
+        <span class="count hidden">0</span>
+        <span class="dice-icon">⬜</span>
+        <span class="dice-label">D6</span>
+      </button>
+      <button class="dice-btn" data-die="8">
+        <span class="count hidden">0</span>
+        <span class="dice-icon">◆</span>
+        <span class="dice-label">D8</span>
+      </button>
+      <button class="dice-btn" data-die="10">
+        <span class="count hidden">0</span>
+        <span class="dice-icon">◈</span>
+        <span class="dice-label">D10</span>
+      </button>
+      <button class="dice-btn" data-die="12">
+        <span class="count hidden">0</span>
+        <span class="dice-icon">⬠</span>
+        <span class="dice-label">D12</span>
+      </button>
+      <button class="dice-btn" data-die="20">
+        <span class="count hidden">0</span>
+        <span class="dice-icon">⬟</span>
+        <span class="dice-label">D20</span>
+      </button>
+    </div>
+
+    <div id="action-row">
+      <div id="modifier-group">
+        <label>보정</label>
+        <input type="number" id="modifier" value="0" min="-99" max="99">
+      </div>
+      <button id="roll-btn">🎲 ROLL!</button>
+      <button id="clear-btn">초기화</button>
+    </div>
+
+    <div id="history-bar"></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/",
+      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import * as CANNON from 'cannon-es';
+
+    // ============================================================
+    // State
+    // ============================================================
+    const dicePool = { 4: 0, 6: 0, 8: 0, 10: 0, 12: 0, 20: 0 };
+    let isRolling = false;
+    const historyList = [];
+    const activeDice = [];      // { mesh, body, sides, preResult }
+    let preRolledResults = [];   // results decided BEFORE physics (fair RNG)
+
+    // ============================================================
+    // Three.js Setup
+    // ============================================================
+    const canvas = document.getElementById('scene');
+    const container = document.getElementById('canvas-container');
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1a1a2e);
+    scene.fog = new THREE.Fog(0x1a1a2e, 25, 45);
+
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
+    camera.position.set(0, 14, 11);
+
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.maxPolarAngle = Math.PI / 2.1;
+    controls.minDistance = 6;
+    controls.maxDistance = 25;
+    controls.target.set(0, 0.3, 0);
+
+    // ---- Lights ----
+    scene.add(new THREE.AmbientLight(0x404060, 0.5));
+
+    const dirLight = new THREE.DirectionalLight(0xfff5e0, 1.3);
+    dirLight.position.set(5, 15, 8);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.set(1024, 1024);
+    dirLight.shadow.camera.near = 1;
+    dirLight.shadow.camera.far = 30;
+    const sc = 10;
+    dirLight.shadow.camera.left = -sc;
+    dirLight.shadow.camera.right = sc;
+    dirLight.shadow.camera.top = sc;
+    dirLight.shadow.camera.bottom = -sc;
+    dirLight.shadow.bias = -0.002;
+    scene.add(dirLight);
+
+    scene.add(new THREE.DirectionalLight(0x6080ff, 0.25).translateX(-5).translateY(5).translateZ(-5));
+
+    // ---- Tray ----
+    const TRAY = 7;
+    const WALL_H = 1.5;
+    const WALL_T = 0.35;
+
+    const trayMat = new THREE.MeshStandardMaterial({ color: 0x1e0f2e, roughness: 0.95, metalness: 0 });
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x3d2252, roughness: 0.6, metalness: 0.1 });
+
+    // Floor
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(TRAY * 2, 0.3, TRAY * 2), trayMat);
+    floor.position.y = -0.15;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // Walls
+    function addVisualWall(w, h, d, x, y, z) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      scene.add(m);
+    }
+
+    addVisualWall(TRAY * 2 + WALL_T, WALL_H, WALL_T, 0, WALL_H / 2, -TRAY);
+    addVisualWall(TRAY * 2 + WALL_T, WALL_H, WALL_T, 0, WALL_H / 2, TRAY);
+    addVisualWall(WALL_T, WALL_H, TRAY * 2 + WALL_T, -TRAY, WALL_H / 2, 0);
+    addVisualWall(WALL_T, WALL_H, TRAY * 2 + WALL_T, TRAY, WALL_H / 2, 0);
+
+    // ============================================================
+    // Cannon.js Physics World
+    // ============================================================
+    const world = new CANNON.World({ gravity: new CANNON.Vec3(0, -35, 0) });
+    world.broadphase = new CANNON.NaiveBroadphase();
+    world.solver.iterations = 15;
+    world.defaultContactMaterial.friction = 0.35;
+    world.defaultContactMaterial.restitution = 0.25;
+
+    // Static bodies
+    const groundBody = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Box(new CANNON.Vec3(TRAY, 0.15, TRAY)) });
+    groundBody.position.y = -0.15;
+    world.addBody(groundBody);
+
+    function addWallBody(hx, hy, hz, x, y, z) {
+      const b = new CANNON.Body({ type: CANNON.Body.STATIC, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
+      b.position.set(x, y, z);
+      world.addBody(b);
+    }
+    addWallBody(TRAY + WALL_T / 2, WALL_H / 2, WALL_T / 2, 0, WALL_H / 2, -TRAY);
+    addWallBody(TRAY + WALL_T / 2, WALL_H / 2, WALL_T / 2, 0, WALL_H / 2, TRAY);
+    addWallBody(WALL_T / 2, WALL_H / 2, TRAY + WALL_T / 2, -TRAY, WALL_H / 2, 0);
+    addWallBody(WALL_T / 2, WALL_H / 2, TRAY + WALL_T / 2, TRAY, WALL_H / 2, 0);
+
+    // ============================================================
+    // Dice color scheme
+    // ============================================================
+    const DICE_COLORS = {
+      4:  { body: 0x4caf50, text: '#ffffff', textBg: '#388e3c' },
+      6:  { body: 0xeceff1, text: '#1a1a1a', textBg: '#cfd8dc' },
+      8:  { body: 0x42a5f5, text: '#ffffff', textBg: '#1976d2' },
+      10: { body: 0xab47bc, text: '#ffffff', textBg: '#7b1fa2' },
+      12: { body: 0xffa726, text: '#1a1a1a', textBg: '#f57c00' },
+      20: { body: 0xef5350, text: '#ffffff', textBg: '#c62828' },
+    };
+
+    // ============================================================
+    // Number textures for D6 faces
+    // ============================================================
+    function makeD6FaceTexture(number, bgHex, textHex) {
+      const sz = 256;
+      const c = document.createElement('canvas');
+      c.width = sz; c.height = sz;
+      const ctx = c.getContext('2d');
+
+      ctx.fillStyle = bgHex;
+      ctx.fillRect(0, 0, sz, sz);
+
+      // Subtle border
+      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(3, 3, sz - 6, sz - 6);
+
+      ctx.fillStyle = textHex;
+      ctx.font = `bold ${sz * 0.52}px 'Segoe UI', system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(number), sz / 2, sz / 2);
+
+      // Underline 6 and 9
+      if (number === 6 || number === 9) {
+        const w = ctx.measureText(String(number)).width;
+        ctx.fillRect(sz / 2 - w / 2, sz * 0.72, w, sz * 0.025);
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // ============================================================
+    // Dice Mesh + Body factories
+    // ============================================================
+
+    // --- D6: Cube with numbered faces ---
+    // Three.js BoxGeometry face order: +X(right), -X(left), +Y(top), -Y(bottom), +Z(front), -Z(back)
+    // We assign: +X=3, -X=4, +Y=2, -Y=5, +Z=1, -Z=6  (opposite faces sum to 7)
+    const D6_FACE_MAP = [3, 4, 2, 5, 1, 6]; // index → face value
+    const D6_NORMALS = [
+      new THREE.Vector3(1, 0, 0),   // +X
+      new THREE.Vector3(-1, 0, 0),  // -X
+      new THREE.Vector3(0, 1, 0),   // +Y
+      new THREE.Vector3(0, -1, 0),  // -Y
+      new THREE.Vector3(0, 0, 1),   // +Z
+      new THREE.Vector3(0, 0, -1),  // -Z
+    ];
+
+    function createD6(scale = 1) {
+      const s = 0.75 * scale;
+      const colors = DICE_COLORS[6];
+      const bgHex = '#' + colors.body.toString(16).padStart(6, '0');
+      const materials = D6_FACE_MAP.map(n =>
+        new THREE.MeshStandardMaterial({
+          map: makeD6FaceTexture(n, bgHex, colors.text),
+          roughness: 0.35,
+          metalness: 0.02,
+        })
+      );
+
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(s, s, s), materials);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      const body = new CANNON.Body({
+        mass: 1,
+        shape: new CANNON.Box(new CANNON.Vec3(s / 2, s / 2, s / 2)),
+        linearDamping: 0.2,
+        angularDamping: 0.2,
+      });
+
+      return { mesh, body, sides: 6 };
+    }
+
+    // --- Generic polyhedral dice (D4, D8, D12, D20) ---
+    // These use flat-shaded colored meshes. Numbers are displayed in the result overlay.
+    function createPolyDie(sides, geoFn, physRadius, scale = 1) {
+      const colors = DICE_COLORS[sides];
+      const mat = new THREE.MeshStandardMaterial({
+        color: colors.body,
+        roughness: 0.3,
+        metalness: 0.1,
+        flatShading: true,
+      });
+      const mesh = new THREE.Mesh(geoFn(scale), mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      const body = new CANNON.Body({
+        mass: 1,
+        shape: new CANNON.Sphere(physRadius * scale),
+        linearDamping: 0.25,
+        angularDamping: 0.25,
+      });
+
+      return { mesh, body, sides };
+    }
+
+    function createD4(s = 1)  { return createPolyDie(4,  sc => new THREE.TetrahedronGeometry(0.7 * sc, 0),     0.52, s); }
+    function createD8(s = 1)  { return createPolyDie(8,  sc => new THREE.OctahedronGeometry(0.6 * sc, 0),      0.52, s); }
+    function createD12(s = 1) { return createPolyDie(12, sc => new THREE.DodecahedronGeometry(0.55 * sc, 0),   0.52, s); }
+    function createD20(s = 1) { return createPolyDie(20, sc => new THREE.IcosahedronGeometry(0.6 * sc, 0),     0.52, s); }
+
+    // --- D10: use a squished pentagonal shape ---
+    function createD10(s = 1) {
+      const colors = DICE_COLORS[10];
+      // Approximate with a double-cone (lathe)
+      const pts = [];
+      const segs = 10;
+      const r = 0.5 * s;
+      const topH = 0.55 * s;
+      const botH = 0.45 * s;
+
+      pts.push(new THREE.Vector2(0, topH));
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs;
+        const ri = r * Math.sin(t * Math.PI);
+        const y = topH - t * (topH + botH);
+        pts.push(new THREE.Vector2(ri, y));
+      }
+      pts.push(new THREE.Vector2(0, -botH));
+
+      const geo = new THREE.LatheGeometry(pts, 5); // 5 segments = pentagonal
+      const mat = new THREE.MeshStandardMaterial({
+        color: colors.body,
+        roughness: 0.3,
+        metalness: 0.15,
+        flatShading: true,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+
+      const body = new CANNON.Body({
+        mass: 1,
+        shape: new CANNON.Sphere(0.5 * s),
+        linearDamping: 0.22,
+        angularDamping: 0.22,
+      });
+
+      return { mesh, body, sides: 10 };
+    }
+
+    const CREATORS = { 4: createD4, 6: createD6, 8: createD8, 10: createD10, 12: createD12, 20: createD20 };
+
+    // ============================================================
+    // Fair RNG (crypto)
+    // ============================================================
+    function rollFair(sides) {
+      const arr = new Uint32Array(1);
+      crypto.getRandomValues(arr);
+      return (arr[0] % sides) + 1;
+    }
+
+    // ============================================================
+    // Roll
+    // ============================================================
+    function clearDice() {
+      for (const d of activeDice) {
+        scene.remove(d.mesh);
+        if (d.mesh.geometry) d.mesh.geometry.dispose();
+        if (Array.isArray(d.mesh.material)) d.mesh.material.forEach(m => { m.dispose(); if (m.map) m.map.dispose(); });
+        else if (d.mesh.material) d.mesh.material.dispose();
+        world.removeBody(d.body);
+      }
+      activeDice.length = 0;
+    }
+
+    function roll() {
+      if (isRolling) return;
+      const total = Object.values(dicePool).reduce((a, b) => a + b, 0);
+      if (total === 0) return;
+      if (total > 20) { alert('최대 20개까지만 굴릴 수 있습니다!'); return; }
+
+      isRolling = true;
+      document.getElementById('roll-btn').disabled = true;
+      hideResult();
+      clearDice();
+
+      // Pre-roll all results (fair RNG, not physics-dependent!)
+      preRolledResults = [];
+      let idx = 0;
+      const spread = Math.min(4, total * 0.6);
+
+      for (const [sides, count] of Object.entries(dicePool)) {
+        const s = parseInt(sides);
+        for (let i = 0; i < count; i++) {
+          const result = rollFair(s);
+          preRolledResults.push({ sides: s, result });
+
+          const creator = CREATORS[s];
+          if (!creator) continue;
+          const die = creator(1);
+          die.preResult = result;
+
+          // Scatter starting positions above tray
+          const angle = (idx / total) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
+          const r = spread * (0.3 + Math.random() * 0.5);
+          const x = Math.cos(angle) * r;
+          const z = Math.sin(angle) * r;
+          const y = 5 + Math.random() * 3;
+
+          die.body.position.set(x, y, z);
+          die.body.quaternion.setFromEuler(
+            Math.random() * Math.PI * 2,
+            Math.random() * Math.PI * 2,
+            Math.random() * Math.PI * 2
+          );
+          die.body.velocity.set(
+            (Math.random() - 0.5) * 8,
+            -(1 + Math.random() * 3),
+            (Math.random() - 0.5) * 8
+          );
+          die.body.angularVelocity.set(
+            (Math.random() - 0.5) * 18,
+            (Math.random() - 0.5) * 18,
+            (Math.random() - 0.5) * 18
+          );
+
+          scene.add(die.mesh);
+          activeDice.push(die);
+          idx++;
+        }
+      }
+
+      settleStart = performance.now();
+      settling = true;
+    }
+
+    let settling = false;
+    let settleStart = 0;
+
+    function checkSettle() {
+      if (!settling) return;
+      const elapsed = performance.now() - settleStart;
+      if (elapsed < 800) return;
+
+      let allStopped = true;
+      for (const d of activeDice) {
+        if (d.body.velocity.length() > 0.06 || d.body.angularVelocity.length() > 0.12) {
+          allStopped = false;
+          break;
+        }
+      }
+
+      if (elapsed > 4500) allStopped = true;
+
+      if (allStopped) {
+        settling = false;
+        onSettled();
+      }
+    }
+
+    function onSettled() {
+      isRolling = false;
+      document.getElementById('roll-btn').disabled = false;
+
+      const modifier = parseInt(document.getElementById('modifier').value) || 0;
+      const sum = preRolledResults.reduce((a, r) => a + r.result, 0);
+      const total = sum + modifier;
+
+      const isSingleD20 = preRolledResults.length === 1 && preRolledResults[0].sides === 20;
+      const isNat20 = isSingleD20 && preRolledResults[0].result === 20;
+      const isNat1 = isSingleD20 && preRolledResults[0].result === 1;
+
+      // Build detail
+      const parts = preRolledResults.map(r => {
+        if (r.sides === 20 && r.result === 20) return `<b class="nat20">${r.result}</b>`;
+        if (r.sides === 20 && r.result === 1) return `<b class="nat1">${r.result}</b>`;
+        return String(r.result);
+      });
+      let detailStr = parts.join(' + ');
+      let detailPlain = preRolledResults.map(r => r.result).join('+');
+      if (modifier !== 0) {
+        detailStr += ` ${modifier >= 0 ? '+' : ''}${modifier}`;
+        detailPlain += `${modifier >= 0 ? '+' : ''}${modifier}`;
+      }
+
+      // Group by die type for label
+      const grouped = {};
+      for (const r of preRolledResults) {
+        if (!grouped[r.sides]) grouped[r.sides] = [];
+        grouped[r.sides].push(r.result);
+      }
+      const groupLabel = Object.entries(grouped)
+        .map(([s, vals]) => `${vals.length}d${s}[${vals.join(',')}]`)
+        .join(' + ');
+
+      showResult(total, detailStr, isNat20, isNat1);
+
+      const dStr = buildDiceString();
+      historyList.unshift({ total, detail: groupLabel, diceStr: dStr, isNat20, isNat1 });
+      if (historyList.length > 30) historyList.pop();
+      renderHistory();
+    }
+
+    // ============================================================
+    // Result overlay
+    // ============================================================
+    function showResult(total, detailHtml, isNat20, isNat1) {
+      const ov = document.getElementById('result-overlay');
+      const tot = document.getElementById('result-total');
+      const det = document.getElementById('result-detail');
+
+      ov.classList.remove('critical', 'fumble');
+      tot.classList.remove('nat20', 'nat1');
+
+      if (isNat20) {
+        tot.textContent = '✨ Natural 20! ✨';
+        tot.classList.add('nat20');
+        ov.classList.add('critical');
+      } else if (isNat1) {
+        tot.textContent = '💀 Natural 1 💀';
+        tot.classList.add('nat1');
+        ov.classList.add('fumble');
+      } else {
+        tot.textContent = total;
+      }
+
+      det.innerHTML = detailHtml;
+      ov.classList.add('visible');
+    }
+
+    function hideResult() {
+      const ov = document.getElementById('result-overlay');
+      ov.classList.remove('visible', 'critical', 'fumble');
+    }
+
+    // ============================================================
+    // History
+    // ============================================================
+    function renderHistory() {
+      const bar = document.getElementById('history-bar');
+      bar.innerHTML = historyList.map(h => {
+        const cls = h.isNat20 ? 'nat20' : h.isNat1 ? 'nat1' : '';
+        return `<div class="history-item" title="${h.detail}"><span class="hist-total ${cls}">${h.total}</span> ${h.diceStr}</div>`;
+      }).join('');
+    }
+
+    // ============================================================
+    // Dice selector UI
+    // ============================================================
+    function updateButtons() {
+      document.querySelectorAll('.dice-btn').forEach(btn => {
+        const d = parseInt(btn.dataset.die);
+        const c = dicePool[d];
+        const el = btn.querySelector('.count');
+        el.textContent = c;
+        el.classList.toggle('hidden', c === 0);
+        btn.classList.toggle('selected', c > 0);
+      });
+    }
+
+    document.querySelectorAll('.dice-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const d = parseInt(btn.dataset.die);
+        dicePool[d] = (dicePool[d] + 1) % 11;
+        updateButtons();
+      });
+      btn.addEventListener('contextmenu', e => {
+        e.preventDefault();
+        const d = parseInt(btn.dataset.die);
+        dicePool[d] = Math.max(0, dicePool[d] - 1);
+        updateButtons();
+      });
+    });
+
+    function buildDiceString() {
+      const parts = [];
+      // Sort by die size
+      for (const s of [4, 6, 8, 10, 12, 20]) {
+        if (dicePool[s] > 0) parts.push(`${dicePool[s]}d${s}`);
+      }
+      const mod = parseInt(document.getElementById('modifier').value) || 0;
+      let str = parts.join('+') || '?';
+      if (mod > 0) str += `+${mod}`;
+      else if (mod < 0) str += `${mod}`;
+      return str;
+    }
+
+    // Presets
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        for (const k of Object.keys(dicePool)) dicePool[k] = 0;
+        document.getElementById('modifier').value = 0;
+        const p = btn.dataset.preset;
+        for (const part of p.replace(/-/g, '+-').split('+')) {
+          const m = part.match(/(\d+)d(\d+)/);
+          if (m) {
+            const sides = parseInt(m[2]);
+            if (sides in dicePool) dicePool[sides] += parseInt(m[1]);
+          } else {
+            const v = parseInt(part);
+            if (!isNaN(v)) document.getElementById('modifier').value = v;
+          }
+        }
+        updateButtons();
+      });
+    });
+
+    // Buttons
+    document.getElementById('roll-btn').addEventListener('click', roll);
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      for (const k of Object.keys(dicePool)) dicePool[k] = 0;
+      document.getElementById('modifier').value = 0;
+      updateButtons();
+      clearDice();
+      hideResult();
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT') return;
+      if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); roll(); }
+    });
+
+    // ============================================================
+    // Animation loop
+    // ============================================================
+    const clock = new THREE.Clock();
+    const dt60 = 1 / 60;
+    let acc = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = Math.min(clock.getDelta(), 0.1);
+      acc += delta;
+      while (acc >= dt60) { world.step(dt60); acc -= dt60; }
+      for (const d of activeDice) {
+        d.mesh.position.copy(d.body.position);
+        d.mesh.quaternion.copy(d.body.quaternion);
+      }
+      checkSettle();
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    // ============================================================
+    // Resize
+    // ============================================================
+    function resize() {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    animate();
+
+    // Loading done
+    setTimeout(() => {
+      document.getElementById('loading').classList.add('hidden');
+      setTimeout(() => document.getElementById('loading')?.remove(), 500);
+    }, 400);
+
+    // Fade hint
+    setTimeout(() => {
+      const h = document.getElementById('shake-hint');
+      if (h) h.style.opacity = '0';
+    }, 5000);
+
+    // PWA
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
