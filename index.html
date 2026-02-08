@@ -189,34 +189,27 @@
       justify-content: center;
     }
 
-    #modifier-group {
+    #notation-group {
       display: flex;
       align-items: center;
-      gap: 4px;
-      background: rgba(255,255,255,0.05);
-      border-radius: 8px;
-      padding: 4px 8px;
     }
 
-    #modifier-group label {
-      font-size: 0.75rem;
-      color: var(--text-dim);
-    }
-
-    #modifier {
-      width: 48px;
-      background: rgba(255,255,255,0.1);
+    #notation {
+      width: 120px;
+      background: rgba(255,255,255,0.08);
       border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 6px;
+      border-radius: 8px;
       color: var(--text);
       font-size: 0.85rem;
       font-weight: 700;
       text-align: center;
-      padding: 4px;
+      padding: 8px 10px;
       outline: none;
+      font-family: 'Segoe UI', monospace, system-ui;
     }
 
-    #modifier:focus { border-color: var(--accent); }
+    #notation:focus { border-color: var(--accent); }
+    #notation::placeholder { color: var(--text-dim); font-weight: 400; opacity: 0.6; }
 
     #roll-btn {
       background: var(--accent);
@@ -430,9 +423,8 @@
     </div>
 
     <div id="action-row">
-      <div id="modifier-group">
-        <label>보정</label>
-        <input type="number" id="modifier" value="0" min="-99" max="99">
+      <div id="notation-group">
+        <input type="text" id="notation" placeholder="2d6+1d8+3" autocomplete="off" spellcheck="false">
       </div>
       <button id="roll-btn">🎲 ROLL!</button>
       <button id="clear-btn">초기화</button>
@@ -966,7 +958,7 @@
       isRolling = false;
       document.getElementById('roll-btn').disabled = false;
 
-      const modifier = parseInt(document.getElementById('modifier').value) || 0;
+      const modifier = currentModifier;
 
       // Advantage/Disadvantage logic
       let effectiveResults = preRolledResults;
@@ -1105,26 +1097,57 @@
         const d = parseInt(btn.dataset.die);
         dicePool[d] = (dicePool[d] + 1) % 11;
         updateButtons();
+        syncNotationInput();
       });
       btn.addEventListener('contextmenu', e => {
         e.preventDefault();
         const d = parseInt(btn.dataset.die);
         dicePool[d] = Math.max(0, dicePool[d] - 1);
         updateButtons();
+        syncNotationInput();
       });
     });
 
     function buildDiceString() {
       const parts = [];
-      // Sort by die size
       for (const s of [4, 6, 8, 10, 12, 20]) {
         if (dicePool[s] > 0) parts.push(`${dicePool[s]}d${s}`);
       }
-      const mod = parseInt(document.getElementById('modifier').value) || 0;
       let str = parts.join('+') || '?';
-      if (mod > 0) str += `+${mod}`;
-      else if (mod < 0) str += `${mod}`;
+      if (currentModifier > 0) str += `+${currentModifier}`;
+      else if (currentModifier < 0) str += `${currentModifier}`;
       return str;
+    }
+
+    let currentModifier = 0;
+
+    // Parse dice notation like "2d6+1d8+3" or "1d20-2"
+    function parseNotation(str) {
+      const pool = { 4: 0, 6: 0, 8: 0, 10: 0, 12: 0, 20: 0 };
+      let mod = 0;
+      const cleaned = str.replace(/\s/g, '').toLowerCase();
+      if (!cleaned) return null;
+
+      // Split on + but keep - as negative
+      const tokens = cleaned.replace(/-/g, '+-').split('+').filter(Boolean);
+      for (const t of tokens) {
+        const diceMatch = t.match(/^(-?\d+)d(\d+)$/);
+        if (diceMatch) {
+          const count = parseInt(diceMatch[1]);
+          const sides = parseInt(diceMatch[2]);
+          if (sides in pool && count > 0) pool[sides] += count;
+        } else {
+          const v = parseInt(t);
+          if (!isNaN(v)) mod += v;
+        }
+      }
+      return { pool, mod };
+    }
+
+    // Sync notation input with current pool
+    function syncNotationInput() {
+      const el = document.getElementById('notation');
+      el.value = buildDiceString();
     }
 
     // Presets
@@ -1133,29 +1156,26 @@
         const special = btn.dataset.special;
         if (special === 'advantage' || special === 'disadvantage') {
           rollMode = special;
-          // Set 2d20
           for (const k of Object.keys(dicePool)) dicePool[k] = 0;
           dicePool[20] = 2;
+          currentModifier = 0;
           updateButtons();
-          roll(); // Auto-roll
+          syncNotationInput();
+          roll();
           return;
         }
 
         rollMode = 'normal';
         for (const k of Object.keys(dicePool)) dicePool[k] = 0;
-        document.getElementById('modifier').value = 0;
+        currentModifier = 0;
         const p = btn.dataset.preset;
-        for (const part of p.replace(/-/g, '+-').split('+')) {
-          const m = part.match(/(\d+)d(\d+)/);
-          if (m) {
-            const sides = parseInt(m[2]);
-            if (sides in dicePool) dicePool[sides] += parseInt(m[1]);
-          } else {
-            const v = parseInt(part);
-            if (!isNaN(v)) document.getElementById('modifier').value = v;
-          }
+        const parsed = parseNotation(p);
+        if (parsed) {
+          Object.assign(dicePool, parsed.pool);
+          currentModifier = parsed.mod;
         }
         updateButtons();
+        syncNotationInput();
       });
     });
 
@@ -1166,16 +1186,43 @@
     });
     document.getElementById('clear-btn').addEventListener('click', () => {
       for (const k of Object.keys(dicePool)) dicePool[k] = 0;
-      document.getElementById('modifier').value = 0;
+      currentModifier = 0;
+      document.getElementById('notation').value = '';
       updateButtons();
       clearDice();
       hideResult();
     });
 
+    // Notation input handling
+    const notationEl = document.getElementById('notation');
+    notationEl.addEventListener('keydown', e => {
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        const parsed = parseNotation(notationEl.value);
+        if (parsed) {
+          Object.assign(dicePool, { 4: 0, 6: 0, 8: 0, 10: 0, 12: 0, 20: 0 }, parsed.pool);
+          currentModifier = parsed.mod;
+          updateButtons();
+          rollMode = 'normal';
+          roll();
+        }
+        notationEl.blur();
+      }
+    });
+
+    notationEl.addEventListener('change', () => {
+      const parsed = parseNotation(notationEl.value);
+      if (parsed) {
+        Object.assign(dicePool, { 4: 0, 6: 0, 8: 0, 10: 0, 12: 0, 20: 0 }, parsed.pool);
+        currentModifier = parsed.mod;
+        updateButtons();
+      }
+    });
+
     // Keyboard shortcuts
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT') return;
-      if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); roll(); }
+      if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); rollMode = 'normal'; roll(); }
     });
 
     // ============================================================
