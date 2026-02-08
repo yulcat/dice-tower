@@ -261,7 +261,12 @@
       font-size: 0.72rem;
       color: var(--text-dim);
       white-space: nowrap;
-      cursor: default;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .history-item:hover {
+      background: rgba(255,255,255,0.12);
     }
 
     .history-item .hist-total {
@@ -1072,10 +1077,28 @@
     // ============================================================
     function renderHistory() {
       const bar = document.getElementById('history-bar');
-      bar.innerHTML = historyList.map(h => {
+      bar.innerHTML = '';
+      historyList.forEach((h, i) => {
         const cls = h.isNat20 ? 'nat20' : h.isNat1 ? 'nat1' : '';
-        return `<div class="history-item" title="${h.detail}"><span class="hist-total ${cls}">${h.total}</span> ${h.diceStr}</div>`;
-      }).join('');
+        const el = document.createElement('div');
+        el.className = 'history-item';
+        el.title = `${h.detail}\n클릭하면 다시 굴림`;
+        el.innerHTML = `<span class="hist-total ${cls}">${h.total}</span> ${h.diceStr}`;
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', () => {
+          // Re-roll same dice combo
+          const parsed = parseNotation(h.diceStr);
+          if (parsed) {
+            Object.assign(dicePool, { 4: 0, 6: 0, 8: 0, 10: 0, 12: 0, 20: 0 }, parsed.pool);
+            currentModifier = parsed.mod;
+            updateButtons();
+            syncNotationInput();
+            rollMode = 'normal';
+            roll();
+          }
+        });
+        bar.appendChild(el);
+      });
     }
 
     // ============================================================
