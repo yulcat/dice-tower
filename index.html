@@ -314,6 +314,51 @@
 
     #loading p { color: var(--text-dim); font-size: 0.9rem; }
 
+    /* Floating result labels on dice */
+    .die-label {
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+      padding: 2px 8px;
+      border-radius: 8px;
+      pointer-events: none;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+
+    .die-label.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .die-label.crit {
+      background: rgba(240, 192, 64, 0.9);
+      color: #1a1a1a;
+      font-size: 16px;
+    }
+
+    .die-label.fumble {
+      background: rgba(233, 69, 96, 0.9);
+      color: #fff;
+      font-size: 16px;
+    }
+
+    /* CSS2DRenderer container */
+    #label-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
     /* Mobile adjustments */
     @media (max-height: 600px) {
       #bottom-panel { padding: 6px 10px 8px; gap: 5px; }
@@ -334,6 +379,7 @@
       <div id="result-total"></div>
       <div id="result-detail"></div>
     </div>
+    <div id="label-container"></div>
     <div id="shake-hint">드래그로 시점 회전</div>
   </div>
 
@@ -346,6 +392,8 @@
       <button class="preset-btn" data-preset="4d6">4d6</button>
       <button class="preset-btn" data-preset="2d10">2d10</button>
       <button class="preset-btn" data-preset="8d6">8d6 🔥</button>
+      <button class="preset-btn" data-preset="adv" data-special="advantage">ADV ⬆</button>
+      <button class="preset-btn" data-preset="dis" data-special="disadvantage">DIS ⬇</button>
     </div>
 
     <div id="dice-selector">
@@ -398,7 +446,8 @@
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.162.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/",
-      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js"
+      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/dist/cannon-es.js",
+      "three/css2d": "https://cdn.jsdelivr.net/npm/three@0.162.0/examples/jsm/renderers/CSS2DRenderer.js"
     }
   }
   </script>
@@ -406,6 +455,7 @@
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/css2d';
     import * as CANNON from 'cannon-es';
 
     // ============================================================
@@ -413,6 +463,7 @@
     // ============================================================
     const dicePool = { 4: 0, 6: 0, 8: 0, 10: 0, 12: 0, 20: 0 };
     let isRolling = false;
+    let rollMode = 'normal'; // 'normal' | 'advantage' | 'disadvantage'
     const historyList = [];
     const activeDice = [];      // { mesh, body, sides, preResult }
     let preRolledResults = [];   // results decided BEFORE physics (fair RNG)
@@ -436,6 +487,15 @@
 
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 100);
     camera.position.set(0, 14, 11);
+
+    // CSS2D label renderer
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(container.clientWidth, container.clientHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.left = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    document.getElementById('label-container').appendChild(labelRenderer.domElement);
 
     const controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
@@ -794,6 +854,8 @@
     // ============================================================
     // Roll
     // ============================================================
+    const floatingLabels = []; // CSS2DObjects to clean up
+
     function clearDice() {
       for (const d of activeDice) {
         scene.remove(d.mesh);
@@ -803,6 +865,13 @@
         world.removeBody(d.body);
       }
       activeDice.length = 0;
+
+      // Remove floating labels
+      for (const lbl of floatingLabels) {
+        lbl.parent?.remove(lbl);
+        lbl.element.remove();
+      }
+      floatingLabels.length = 0;
     }
 
     function roll() {
@@ -898,12 +967,26 @@
       document.getElementById('roll-btn').disabled = false;
 
       const modifier = parseInt(document.getElementById('modifier').value) || 0;
-      const sum = preRolledResults.reduce((a, r) => a + r.result, 0);
+
+      // Advantage/Disadvantage logic
+      let effectiveResults = preRolledResults;
+      let advDisNote = '';
+      if (rollMode !== 'normal' && preRolledResults.length === 2 &&
+          preRolledResults.every(r => r.sides === 20)) {
+        const r1 = preRolledResults[0].result;
+        const r2 = preRolledResults[1].result;
+        const chosen = rollMode === 'advantage' ? Math.max(r1, r2) : Math.min(r1, r2);
+        const modeLabel = rollMode === 'advantage' ? 'ADV ⬆' : 'DIS ⬇';
+        advDisNote = `${modeLabel} (${r1}, ${r2}) → `;
+        effectiveResults = [{ sides: 20, result: chosen }];
+      }
+
+      const sum = effectiveResults.reduce((a, r) => a + r.result, 0);
       const total = sum + modifier;
 
-      const isSingleD20 = preRolledResults.length === 1 && preRolledResults[0].sides === 20;
-      const isNat20 = isSingleD20 && preRolledResults[0].result === 20;
-      const isNat1 = isSingleD20 && preRolledResults[0].result === 1;
+      const isSingleD20 = effectiveResults.length === 1 && effectiveResults[0].sides === 20;
+      const isNat20 = isSingleD20 && effectiveResults[0].result === 20;
+      const isNat1 = isSingleD20 && effectiveResults[0].result === 1;
 
       // Build detail
       const parts = preRolledResults.map(r => {
@@ -911,11 +994,9 @@
         if (r.sides === 20 && r.result === 1) return `<b class="nat1">${r.result}</b>`;
         return String(r.result);
       });
-      let detailStr = parts.join(' + ');
-      let detailPlain = preRolledResults.map(r => r.result).join('+');
+      let detailStr = advDisNote + parts.join(' + ');
       if (modifier !== 0) {
         detailStr += ` ${modifier >= 0 ? '+' : ''}${modifier}`;
-        detailPlain += `${modifier >= 0 ? '+' : ''}${modifier}`;
       }
 
       // Group by die type for label
@@ -924,11 +1005,34 @@
         if (!grouped[r.sides]) grouped[r.sides] = [];
         grouped[r.sides].push(r.result);
       }
-      const groupLabel = Object.entries(grouped)
+      let groupLabel = Object.entries(grouped)
         .map(([s, vals]) => `${vals.length}d${s}[${vals.join(',')}]`)
         .join(' + ');
+      if (advDisNote) groupLabel = advDisNote + groupLabel;
 
       showResult(total, detailStr, isNat20, isNat1);
+
+      // Show floating labels on each die
+      activeDice.forEach((die, i) => {
+        const r = preRolledResults[i];
+        if (!r) return;
+
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'die-label';
+        labelDiv.textContent = r.result;
+
+        // Special styling for nat20/nat1
+        if (r.sides === 20 && r.result === 20) labelDiv.classList.add('crit');
+        if (r.sides === 20 && r.result === 1) labelDiv.classList.add('fumble');
+
+        const labelObj = new CSS2DObject(labelDiv);
+        labelObj.position.set(0, 0.8, 0); // float above die
+        die.mesh.add(labelObj);
+        floatingLabels.push(labelObj);
+
+        // Animate in with slight delay per die
+        setTimeout(() => labelDiv.classList.add('visible'), 50 + i * 80);
+      });
 
       // Critical sound
       if (isNat20 || isNat1) playCritSound(isNat20);
@@ -1026,6 +1130,18 @@
     // Presets
     document.querySelectorAll('.preset-btn').forEach(btn => {
       btn.addEventListener('click', () => {
+        const special = btn.dataset.special;
+        if (special === 'advantage' || special === 'disadvantage') {
+          rollMode = special;
+          // Set 2d20
+          for (const k of Object.keys(dicePool)) dicePool[k] = 0;
+          dicePool[20] = 2;
+          updateButtons();
+          roll(); // Auto-roll
+          return;
+        }
+
+        rollMode = 'normal';
         for (const k of Object.keys(dicePool)) dicePool[k] = 0;
         document.getElementById('modifier').value = 0;
         const p = btn.dataset.preset;
@@ -1044,7 +1160,10 @@
     });
 
     // Buttons
-    document.getElementById('roll-btn').addEventListener('click', roll);
+    document.getElementById('roll-btn').addEventListener('click', () => {
+      rollMode = 'normal'; // manual roll resets mode
+      roll();
+    });
     document.getElementById('clear-btn').addEventListener('click', () => {
       for (const k of Object.keys(dicePool)) dicePool[k] = 0;
       document.getElementById('modifier').value = 0;
@@ -1078,6 +1197,7 @@
       checkSettle();
       controls.update();
       renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
     }
 
     // ============================================================
@@ -1089,6 +1209,7 @@
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      labelRenderer.setSize(w, h);
     }
     window.addEventListener('resize', resize);
     resize();
