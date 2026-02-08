@@ -521,7 +521,7 @@
     // ============================================================
     const DICE_COLORS = {
       4:  { body: 0x4caf50, text: '#ffffff', textBg: '#388e3c' },
-      6:  { body: 0xeceff1, text: '#1a1a1a', textBg: '#cfd8dc' },
+      6:  { body: 0xeceff1, text: '#1a1a1a', pip: '#222222', textBg: '#cfd8dc' },
       8:  { body: 0x42a5f5, text: '#ffffff', textBg: '#1976d2' },
       10: { body: 0xab47bc, text: '#ffffff', textBg: '#7b1fa2' },
       12: { body: 0xffa726, text: '#1a1a1a', textBg: '#f57c00' },
@@ -531,35 +531,140 @@
     // ============================================================
     // Number textures for D6 faces
     // ============================================================
-    function makeD6FaceTexture(number, bgHex, textHex) {
+    // D6 Pip (dot) layouts — standard die
+    const PIP_LAYOUTS = {
+      1: [[0.5, 0.5]],
+      2: [[0.27, 0.27], [0.73, 0.73]],
+      3: [[0.27, 0.27], [0.5, 0.5], [0.73, 0.73]],
+      4: [[0.27, 0.27], [0.73, 0.27], [0.27, 0.73], [0.73, 0.73]],
+      5: [[0.27, 0.27], [0.73, 0.27], [0.5, 0.5], [0.27, 0.73], [0.73, 0.73]],
+      6: [[0.27, 0.25], [0.73, 0.25], [0.27, 0.5], [0.73, 0.5], [0.27, 0.75], [0.73, 0.75]],
+    };
+
+    function makeD6FaceTexture(number, bgHex, pipColor) {
       const sz = 256;
       const c = document.createElement('canvas');
       c.width = sz; c.height = sz;
       const ctx = c.getContext('2d');
 
+      // Background with rounded corners
+      const r = sz * 0.08;
       ctx.fillStyle = bgHex;
-      ctx.fillRect(0, 0, sz, sz);
+      ctx.beginPath();
+      ctx.roundRect(0, 0, sz, sz, r);
+      ctx.fill();
 
-      // Subtle border
-      ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-      ctx.lineWidth = 6;
-      ctx.strokeRect(3, 3, sz - 6, sz - 6);
+      // Subtle inner border
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(4, 4, sz - 8, sz - 8, r - 2);
+      ctx.stroke();
 
-      ctx.fillStyle = textHex;
-      ctx.font = `bold ${sz * 0.52}px 'Segoe UI', system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(number), sz / 2, sz / 2);
-
-      // Underline 6 and 9
-      if (number === 6 || number === 9) {
-        const w = ctx.measureText(String(number)).width;
-        ctx.fillRect(sz / 2 - w / 2, sz * 0.72, w, sz * 0.025);
+      // Draw pips
+      const pipR = sz * 0.075;
+      ctx.fillStyle = pipColor;
+      const layout = PIP_LAYOUTS[number] || [];
+      for (const [px, py] of layout) {
+        ctx.beginPath();
+        ctx.arc(px * sz, py * sz, pipR, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       const tex = new THREE.CanvasTexture(c);
       tex.colorSpace = THREE.SRGBColorSpace;
       return tex;
+    }
+
+    // ============================================================
+    // Sound effects (Web Audio API, synthesized)
+    // ============================================================
+    let audioCtx = null;
+
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    function playDiceSound() {
+      try {
+        const ctx = getAudioCtx();
+        const now = ctx.currentTime;
+
+        // Multiple short "clack" sounds with slight delays for multiple dice
+        const count = activeDice.length || 1;
+        for (let i = 0; i < Math.min(count, 6); i++) {
+          const delay = i * 0.06 + Math.random() * 0.04;
+          playClack(ctx, now + delay, 0.15 + Math.random() * 0.1);
+        }
+
+        // Landing thud after a pause
+        setTimeout(() => {
+          try {
+            const n = ctx.currentTime;
+            playThud(ctx, n, 0.12);
+          } catch(e) {}
+        }, 400 + Math.random() * 200);
+      } catch(e) { /* audio not available */ }
+    }
+
+    function playClack(ctx, time, vol) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+
+      // Noise-like short burst
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(800 + Math.random() * 600, time);
+      osc.frequency.exponentialRampToValueAtTime(200, time + 0.04);
+
+      filter.type = 'bandpass';
+      filter.frequency.value = 1500;
+      filter.Q.value = 1.5;
+
+      gain.gain.setValueAtTime(vol, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.06);
+
+      osc.connect(filter).connect(gain).connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + 0.06);
+    }
+
+    function playThud(ctx, time, vol) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(150, time);
+      osc.frequency.exponentialRampToValueAtTime(60, time + 0.1);
+
+      gain.gain.setValueAtTime(vol, time);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.15);
+
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + 0.15);
+    }
+
+    function playCritSound(isNat20) {
+      try {
+        const ctx = getAudioCtx();
+        const now = ctx.currentTime;
+        const baseFreq = isNat20 ? 523 : 220; // C5 vs A3
+        const notes = isNat20 ? [1, 1.25, 1.5, 2] : [1, 0.85, 0.7]; // ascending vs descending
+
+        notes.forEach((mult, i) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = isNat20 ? 'triangle' : 'sawtooth';
+          osc.frequency.value = baseFreq * mult;
+          gain.gain.setValueAtTime(0.12, now + i * 0.1);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.25);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(now + i * 0.1);
+          osc.stop(now + i * 0.1 + 0.25);
+        });
+      } catch(e) {}
     }
 
     // ============================================================
@@ -583,9 +688,10 @@
       const s = 0.75 * scale;
       const colors = DICE_COLORS[6];
       const bgHex = '#' + colors.body.toString(16).padStart(6, '0');
+      const pipColor = colors.pip || colors.text;
       const materials = D6_FACE_MAP.map(n =>
         new THREE.MeshStandardMaterial({
-          map: makeD6FaceTexture(n, bgHex, colors.text),
+          map: makeD6FaceTexture(n, bgHex, pipColor),
           roughness: 0.35,
           metalness: 0.02,
         })
@@ -758,6 +864,9 @@
 
       settleStart = performance.now();
       settling = true;
+
+      // Sound effect
+      playDiceSound();
     }
 
     let settling = false;
@@ -820,6 +929,9 @@
         .join(' + ');
 
       showResult(total, detailStr, isNat20, isNat1);
+
+      // Critical sound
+      if (isNat20 || isNat1) playCritSound(isNat20);
 
       const dStr = buildDiceString();
       historyList.unshift({ total, detail: groupLabel, diceStr: dStr, isNat20, isNat1 });
