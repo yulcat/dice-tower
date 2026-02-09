@@ -829,26 +829,62 @@
     function createD12(s = 1) { return createPolyDie(12, sc => new THREE.DodecahedronGeometry(0.55 * sc, 0),   0.52, s); }
     function createD20(s = 1) { return createPolyDie(20, sc => new THREE.IcosahedronGeometry(0.6 * sc, 0),     0.52, s); }
 
-    // --- D10: use a squished pentagonal shape ---
+    // --- D10: Pentagonal Trapezohedron (proper geometry) ---
     function createD10(s = 1) {
       const colors = DICE_COLORS[10];
-      // Approximate with a double-cone (lathe)
-      const pts = [];
-      const segs = 10;
-      const r = 0.5 * s;
-      const topH = 0.55 * s;
-      const botH = 0.45 * s;
+      const sc = 0.5 * s;
 
-      pts.push(new THREE.Vector2(0, topH));
-      for (let i = 0; i <= segs; i++) {
-        const t = i / segs;
-        const ri = r * Math.sin(t * Math.PI);
-        const y = topH - t * (topH + botH);
-        pts.push(new THREE.Vector2(ri, y));
+      // Pentagonal trapezohedron: 12 vertices, 10 kite-shaped faces
+      // Top apex, bottom apex, and two rings of 5 vertices (rotated 36° apart)
+      const topY = 0.6 * sc;
+      const botY = -0.6 * sc;
+      const upperY = 0.22 * sc;
+      const lowerY = -0.22 * sc;
+      const upperR = 0.55 * sc;
+      const lowerR = 0.55 * sc;
+
+      const verts = [];
+      // 0: top apex
+      verts.push(new THREE.Vector3(0, topY, 0));
+      // 1-5: upper ring
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        verts.push(new THREE.Vector3(Math.cos(a) * upperR, upperY, Math.sin(a) * upperR));
       }
-      pts.push(new THREE.Vector2(0, -botH));
+      // 6-10: lower ring (rotated 36°)
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2 + Math.PI / 5;
+        verts.push(new THREE.Vector3(Math.cos(a) * lowerR, lowerY, Math.sin(a) * lowerR));
+      }
+      // 11: bottom apex
+      verts.push(new THREE.Vector3(0, botY, 0));
 
-      const geo = new THREE.LatheGeometry(pts, 5); // 5 segments = pentagonal
+      // 10 kite faces: each connects top/bottom apex with adjacent ring vertices
+      // Upper 5 faces: top, upper[i], lower[i], upper[i+1]
+      // Lower 5 faces: bottom, lower[i], upper[i+1], lower[i+1]
+      const faceIndices = [];
+      for (let i = 0; i < 5; i++) {
+        const u0 = 1 + i;
+        const u1 = 1 + (i + 1) % 5;
+        const l0 = 6 + i;
+        const l1 = 6 + (i + 1) % 5;
+        // Upper kite: top → u0 → l0 → u1
+        faceIndices.push([0, u0, l0], [0, l0, u1]);
+        // Lower kite: bottom → l1 → u1 → l0
+        faceIndices.push([11, l1, u1], [11, u1, l0]);
+      }
+
+      // Build BufferGeometry
+      const positions = [];
+      for (const tri of faceIndices) {
+        for (const vi of tri) {
+          positions.push(verts[vi].x, verts[vi].y, verts[vi].z);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.computeVertexNormals();
+
       const mat = new THREE.MeshStandardMaterial({
         color: colors.body,
         roughness: 0.3,
@@ -859,10 +895,45 @@
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
-      // D10 LatheGeometry doesn't convert well to ConvexPolyhedron — use Sphere
+      // ConvexPolyhedron from the 12 unique vertices
+      const cannonVerts = verts.map(v => new CANNON.Vec3(v.x, v.y, v.z));
+      // Build proper convex faces (kite quads split into triangles, CCW winding viewed from outside)
+      const cannonFaces = [];
+      for (let i = 0; i < 5; i++) {
+        const u0 = 1 + i;
+        const u1 = 1 + (i + 1) % 5;
+        const l0 = 6 + i;
+        const l1 = 6 + (i + 1) % 5;
+        // Upper kite as quad: top, u0, l0, u1
+        cannonFaces.push([0, u0, l0, u1]);
+        // Lower kite as quad: bottom, l0, u1, l1
+        cannonFaces.push([11, l0, u1, l1]);
+      }
+
+      let shape;
+      try {
+        shape = new CANNON.ConvexPolyhedron({ vertices: cannonVerts, faces: cannonFaces });
+      } catch (e) {
+        // Fallback: use triangulated faces
+        try {
+          const triFaces = [];
+          for (let i = 0; i < 5; i++) {
+            const u0 = 1 + i;
+            const u1 = 1 + (i + 1) % 5;
+            const l0 = 6 + i;
+            const l1 = 6 + (i + 1) % 5;
+            triFaces.push([0, u0, l0], [0, l0, u1]);
+            triFaces.push([11, l1, u1], [11, u1, l0]);
+          }
+          shape = new CANNON.ConvexPolyhedron({ vertices: cannonVerts, faces: triFaces });
+        } catch (e2) {
+          shape = new CANNON.Sphere(0.45 * s);
+        }
+      }
+
       const body = new CANNON.Body({
         mass: 1,
-        shape: new CANNON.Sphere(0.45 * s),
+        shape,
         linearDamping: 0.22,
         angularDamping: 0.22,
       });
