@@ -782,9 +782,41 @@
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
+      // Use ConvexPolyhedron from mesh geometry for accurate collision
+      let shape;
+      try {
+        const geo = mesh.geometry;
+        const pos = geo.getAttribute('position');
+        const verts = [];
+        const seen = new Map();
+        const uniqueVerts = [];
+        for (let i = 0; i < pos.count; i++) {
+          const key = `${pos.getX(i).toFixed(4)},${pos.getY(i).toFixed(4)},${pos.getZ(i).toFixed(4)}`;
+          if (!seen.has(key)) {
+            seen.set(key, uniqueVerts.length);
+            uniqueVerts.push(new CANNON.Vec3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+          }
+          verts.push(seen.get(key));
+        }
+        const faces = [];
+        const idx2 = geo.getIndex();
+        if (idx2) {
+          for (let i = 0; i < idx2.count; i += 3) {
+            faces.push([verts[idx2.getX(i)], verts[idx2.getX(i+1)], verts[idx2.getX(i+2)]]);
+          }
+        } else {
+          for (let i = 0; i < verts.length; i += 3) {
+            faces.push([verts[i], verts[i+1], verts[i+2]]);
+          }
+        }
+        shape = new CANNON.ConvexPolyhedron({ vertices: uniqueVerts, faces });
+      } catch (e) {
+        shape = new CANNON.Sphere(physRadius * scale);
+      }
+
       const body = new CANNON.Body({
         mass: 1,
-        shape: new CANNON.Sphere(physRadius * scale),
+        shape,
         linearDamping: 0.25,
         angularDamping: 0.25,
       });
@@ -827,9 +859,40 @@
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
+      // Use ConvexPolyhedron for D10 too
+      let d10shape;
+      try {
+        const pos = geo.getAttribute('position');
+        const seen = new Map();
+        const uniqueVerts = [];
+        const vertMap = [];
+        for (let i = 0; i < pos.count; i++) {
+          const key = `${pos.getX(i).toFixed(4)},${pos.getY(i).toFixed(4)},${pos.getZ(i).toFixed(4)}`;
+          if (!seen.has(key)) {
+            seen.set(key, uniqueVerts.length);
+            uniqueVerts.push(new CANNON.Vec3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+          }
+          vertMap.push(seen.get(key));
+        }
+        const faces = [];
+        const idx2 = geo.getIndex();
+        if (idx2) {
+          for (let i = 0; i < idx2.count; i += 3) {
+            faces.push([vertMap[idx2.getX(i)], vertMap[idx2.getX(i+1)], vertMap[idx2.getX(i+2)]]);
+          }
+        } else {
+          for (let i = 0; i < vertMap.length; i += 3) {
+            faces.push([vertMap[i], vertMap[i+1], vertMap[i+2]]);
+          }
+        }
+        d10shape = new CANNON.ConvexPolyhedron({ vertices: uniqueVerts, faces });
+      } catch (e) {
+        d10shape = new CANNON.Sphere(0.5 * s);
+      }
+
       const body = new CANNON.Body({
         mass: 1,
-        shape: new CANNON.Sphere(0.5 * s),
+        shape: d10shape,
         linearDamping: 0.22,
         angularDamping: 0.22,
       });
@@ -898,12 +961,12 @@
           const die = creator(1);
           die.preResult = result;
 
-          // Scatter starting positions above tray
-          const angle = (idx / total) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
-          const r = spread * (0.3 + Math.random() * 0.5);
+          // Scatter starting positions above tray — spread out more to avoid overlap
+          const angle = (idx / total) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+          const r = spread * (0.4 + Math.random() * 0.5) + idx * 0.15;
           const x = Math.cos(angle) * r;
           const z = Math.sin(angle) * r;
-          const y = 5 + Math.random() * 3;
+          const y = 6 + idx * 1.2 + Math.random() * 2;
 
           die.body.position.set(x, y, z);
           die.body.quaternion.setFromEuler(
