@@ -725,6 +725,151 @@
     }
 
     // ============================================================
+    // Number texture & face material utilities
+    // ============================================================
+
+    // Create a canvas texture with a number drawn at center
+    function makeNumberTexture(number, bgHex, textColor) {
+      const sz = 256;
+      const c = document.createElement('canvas');
+      c.width = sz; c.height = sz;
+      const ctx = c.getContext('2d');
+
+      // Background
+      ctx.fillStyle = bgHex;
+      ctx.fillRect(0, 0, sz, sz);
+
+      // Number text
+      const numStr = String(number);
+      const fontSize = numStr.length > 1 ? sz * 0.38 : sz * 0.5;
+      ctx.font = `bold ${fontSize}px 'Segoe UI', system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // Shadow for readability
+      ctx.shadowColor = 'rgba(0,0,0,0.4)';
+      ctx.shadowBlur = 6;
+      ctx.fillStyle = textColor;
+      ctx.fillText(numStr, sz / 2, sz / 2);
+      ctx.shadowColor = 'transparent';
+
+      // Underline 6 and 9 to distinguish them
+      if (number === 6 || number === 9) {
+        const tw = ctx.measureText(numStr).width;
+        ctx.strokeStyle = textColor;
+        ctx.lineWidth = sz * 0.025;
+        ctx.beginPath();
+        ctx.moveTo((sz - tw) / 2, sz * 0.74);
+        ctx.lineTo((sz + tw) / 2, sz * 0.74);
+        ctx.stroke();
+      }
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    }
+
+    // Build Cannon.js ConvexPolyhedron from a Three.js BufferGeometry
+    function buildConvexShape(geo) {
+      const pos = geo.getAttribute('position');
+      const seen = new Map();
+      const uniqueVerts = [];
+      const vertMap = [];
+
+      for (let i = 0; i < pos.count; i++) {
+        const key = `${pos.getX(i).toFixed(4)},${pos.getY(i).toFixed(4)},${pos.getZ(i).toFixed(4)}`;
+        if (!seen.has(key)) {
+          seen.set(key, uniqueVerts.length);
+          uniqueVerts.push(new CANNON.Vec3(pos.getX(i), pos.getY(i), pos.getZ(i)));
+        }
+        vertMap.push(seen.get(key));
+      }
+
+      const faces = [];
+      const idx = geo.getIndex();
+      if (idx) {
+        for (let i = 0; i < idx.count; i += 3) {
+          faces.push([vertMap[idx.getX(i)], vertMap[idx.getX(i+1)], vertMap[idx.getX(i+2)]]);
+        }
+      } else {
+        for (let i = 0; i < vertMap.length; i += 3) {
+          faces.push([vertMap[i], vertMap[i+1], vertMap[i+2]]);
+        }
+      }
+
+      return new CANNON.ConvexPolyhedron({ vertices: uniqueVerts, faces });
+    }
+
+    // Setup per-face UV mapping and material groups on a BufferGeometry
+    // Returns an array of materials (one per face) with numbered textures
+    function setupFaceMaterials(geo, numFaces, trisPerFace, numbers, bgHex, textColor) {
+      const vertsPerFace = trisPerFace * 3;
+      const pos = geo.getAttribute('position');
+
+      geo.clearGroups();
+      for (let f = 0; f < numFaces; f++) {
+        geo.addGroup(f * vertsPerFace, vertsPerFace, f);
+      }
+
+      const uvData = new Float32Array(pos.count * 2);
+      const worldUp = new THREE.Vector3(0, 1, 0);
+
+      for (let f = 0; f < numFaces; f++) {
+        const start = f * vertsPerFace;
+        const fVerts = [];
+        for (let v = 0; v < vertsPerFace; v++) {
+          fVerts.push(new THREE.Vector3(
+            pos.getX(start + v), pos.getY(start + v), pos.getZ(start + v)
+          ));
+        }
+
+        // Face normal from first triangle
+        const e1 = new THREE.Vector3().subVectors(fVerts[1], fVerts[0]);
+        const e2 = new THREE.Vector3().subVectors(fVerts[2], fVerts[0]);
+        const normal = new THREE.Vector3().crossVectors(e1, e2).normalize();
+
+        // Centroid
+        const centroid = new THREE.Vector3();
+        for (const v of fVerts) centroid.add(v);
+        centroid.divideScalar(fVerts.length);
+
+        // Orient text: project world Y onto face plane for readable "up"
+        let up = worldUp.clone().sub(normal.clone().multiplyScalar(worldUp.dot(normal)));
+        if (up.lengthSq() < 0.001) {
+          up.set(0, 0, 1).sub(normal.clone().multiplyScalar(new THREE.Vector3(0, 0, 1).dot(normal)));
+        }
+        up.normalize();
+        const right = new THREE.Vector3().crossVectors(up, normal).normalize();
+
+        // Project vertices to 2D face-local coords
+        let maxExt = 0;
+        const proj = fVerts.map(v => {
+          const d = new THREE.Vector3().subVectors(v, centroid);
+          const x = d.dot(right);
+          const y = d.dot(up);
+          maxExt = Math.max(maxExt, Math.abs(x), Math.abs(y));
+          return { x, y };
+        });
+        maxExt = maxExt || 1;
+
+        // Map to UV: centroid → (0.5, 0.5) with margin
+        for (let v = 0; v < vertsPerFace; v++) {
+          uvData[(start + v) * 2]     = 0.5 + proj[v].x / (2.4 * maxExt);
+          uvData[(start + v) * 2 + 1] = 0.5 + proj[v].y / (2.4 * maxExt);
+        }
+      }
+
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvData, 2));
+
+      return numbers.map(n => new THREE.MeshStandardMaterial({
+        map: makeNumberTexture(n, bgHex, textColor),
+        roughness: 0.3,
+        metalness: 0.1,
+        flatShading: true,
+      }));
+    }
+
+    // ============================================================
     // Dice Mesh + Body factories
     // ============================================================
 
@@ -768,48 +913,29 @@
       return { mesh, body, sides: 6 };
     }
 
-    // --- Generic polyhedral dice (D4, D8, D12, D20) ---
-    // These use flat-shaded colored meshes. Numbers are displayed in the result overlay.
+    // --- Generic polyhedral dice (D4, D8, D12, D20) with numbered faces ---
     function createPolyDie(sides, geoFn, physRadius, scale = 1) {
       const colors = DICE_COLORS[sides];
-      const mat = new THREE.MeshStandardMaterial({
-        color: colors.body,
-        roughness: 0.3,
-        metalness: 0.1,
-        flatShading: true,
-      });
-      const mesh = new THREE.Mesh(geoFn(scale), mat);
+      const bgHex = '#' + colors.body.toString(16).padStart(6, '0');
+      const geo = geoFn(scale);
+
+      // Calculate triangles per logical face
+      const pos = geo.getAttribute('position');
+      const totalTris = pos.count / 3;
+      const trisPerFace = Math.round(totalTris / sides);
+
+      // Per-face numbered materials with proper UV mapping
+      const numbers = Array.from({ length: sides }, (_, i) => i + 1);
+      const materials = setupFaceMaterials(geo, sides, trisPerFace, numbers, bgHex, colors.text);
+
+      const mesh = new THREE.Mesh(geo, materials);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
-      // Use ConvexPolyhedron from mesh geometry for accurate collision
+      // ConvexPolyhedron collision shape
       let shape;
       try {
-        const geo = mesh.geometry;
-        const pos = geo.getAttribute('position');
-        const verts = [];
-        const seen = new Map();
-        const uniqueVerts = [];
-        for (let i = 0; i < pos.count; i++) {
-          const key = `${pos.getX(i).toFixed(4)},${pos.getY(i).toFixed(4)},${pos.getZ(i).toFixed(4)}`;
-          if (!seen.has(key)) {
-            seen.set(key, uniqueVerts.length);
-            uniqueVerts.push(new CANNON.Vec3(pos.getX(i), pos.getY(i), pos.getZ(i)));
-          }
-          verts.push(seen.get(key));
-        }
-        const faces = [];
-        const idx2 = geo.getIndex();
-        if (idx2) {
-          for (let i = 0; i < idx2.count; i += 3) {
-            faces.push([verts[idx2.getX(i)], verts[idx2.getX(i+1)], verts[idx2.getX(i+2)]]);
-          }
-        } else {
-          for (let i = 0; i < verts.length; i += 3) {
-            faces.push([verts[i], verts[i+1], verts[i+2]]);
-          }
-        }
-        shape = new CANNON.ConvexPolyhedron({ vertices: uniqueVerts, faces });
+        shape = buildConvexShape(geo);
       } catch (e) {
         shape = new CANNON.Sphere(physRadius * scale);
       }
@@ -830,12 +956,13 @@
     function createD20(s = 1) { return createPolyDie(20, sc => new THREE.IcosahedronGeometry(0.6 * sc, 0),     0.52, s); }
 
     // --- D10: Pentagonal Trapezohedron (proper geometry) ---
+    // Fixes: larger size to match other dice, higher damping to reduce bouncing, numbered faces
     function createD10(s = 1) {
       const colors = DICE_COLORS[10];
-      const sc = 0.5 * s;
+      const bgHex = '#' + colors.body.toString(16).padStart(6, '0');
+      const sc = 0.75 * s;  // Increased from 0.5 to match other dice sizes
 
       // Pentagonal trapezohedron: 12 vertices, 10 kite-shaped faces
-      // Top apex, bottom apex, and two rings of 5 vertices (rotated 36° apart)
       const topY = 0.6 * sc;
       const botY = -0.6 * sc;
       const upperY = 0.22 * sc;
@@ -844,37 +971,28 @@
       const lowerR = 0.55 * sc;
 
       const verts = [];
-      // 0: top apex
       verts.push(new THREE.Vector3(0, topY, 0));
-      // 1-5: upper ring
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2;
         verts.push(new THREE.Vector3(Math.cos(a) * upperR, upperY, Math.sin(a) * upperR));
       }
-      // 6-10: lower ring (rotated 36°)
       for (let i = 0; i < 5; i++) {
         const a = (i / 5) * Math.PI * 2 + Math.PI / 5;
         verts.push(new THREE.Vector3(Math.cos(a) * lowerR, lowerY, Math.sin(a) * lowerR));
       }
-      // 11: bottom apex
       verts.push(new THREE.Vector3(0, botY, 0));
 
-      // 10 kite faces: each connects top/bottom apex with adjacent ring vertices
-      // Upper 5 faces: top, upper[i], lower[i], upper[i+1]
-      // Lower 5 faces: bottom, lower[i], upper[i+1], lower[i+1]
+      // 10 kite faces, each as 2 triangles
       const faceIndices = [];
       for (let i = 0; i < 5; i++) {
         const u0 = 1 + i;
         const u1 = 1 + (i + 1) % 5;
         const l0 = 6 + i;
         const l1 = 6 + (i + 1) % 5;
-        // Upper kite: top → u0 → l0 → u1
         faceIndices.push([0, u0, l0], [0, l0, u1]);
-        // Lower kite: bottom → l1 → u1 → l0
         faceIndices.push([11, l1, u1], [11, u1, l0]);
       }
 
-      // Build BufferGeometry
       const positions = [];
       for (const tri of faceIndices) {
         for (const vi of tri) {
@@ -885,28 +1003,23 @@
       geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
       geo.computeVertexNormals();
 
-      const mat = new THREE.MeshStandardMaterial({
-        color: colors.body,
-        roughness: 0.3,
-        metalness: 0.15,
-        flatShading: true,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
+      // 10 faces, 2 triangles each — numbered 1-10
+      const numbers = Array.from({ length: 10 }, (_, i) => i + 1);
+      const materials = setupFaceMaterials(geo, 10, 2, numbers, bgHex, colors.text);
+
+      const mesh = new THREE.Mesh(geo, materials);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
 
-      // ConvexPolyhedron from the 12 unique vertices
+      // Physics: ConvexPolyhedron from the 12 unique vertices
       const cannonVerts = verts.map(v => new CANNON.Vec3(v.x, v.y, v.z));
-      // Build proper convex faces (kite quads split into triangles, CCW winding viewed from outside)
       const cannonFaces = [];
       for (let i = 0; i < 5; i++) {
         const u0 = 1 + i;
         const u1 = 1 + (i + 1) % 5;
         const l0 = 6 + i;
         const l1 = 6 + (i + 1) % 5;
-        // Upper kite as quad: top, u0, l0, u1
         cannonFaces.push([0, u0, l0, u1]);
-        // Lower kite as quad: bottom, l0, u1, l1
         cannonFaces.push([11, l0, u1, l1]);
       }
 
@@ -914,7 +1027,6 @@
       try {
         shape = new CANNON.ConvexPolyhedron({ vertices: cannonVerts, faces: cannonFaces });
       } catch (e) {
-        // Fallback: use triangulated faces
         try {
           const triFaces = [];
           for (let i = 0; i < 5; i++) {
@@ -934,8 +1046,8 @@
       const body = new CANNON.Body({
         mass: 1,
         shape,
-        linearDamping: 0.22,
-        angularDamping: 0.22,
+        linearDamping: 0.35,   // Increased from 0.22 to reduce bouncing
+        angularDamping: 0.35,
       });
 
       return { mesh, body, sides: 10 };

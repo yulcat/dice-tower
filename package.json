@@ -1,0 +1,28 @@
+{
+  "name": "dice-tower",
+  "version": "1.0.0",
+  "description": "3D Physics Dice Roller for TRPG sessions.",
+  "main": "playwright.config.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "npx playwright test",
+    "serve": "python3 -m http.server 3459 --bind 127.0.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yulcat/dice-tower.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/yulcat/dice-tower/issues"
+  },
+  "homepage": "https://github.com/yulcat/dice-tower#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

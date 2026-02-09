@@ -1,3 +1,5 @@
 node_modules/
 gen-icons.js
 .DS_Store
+test-results/
+playwright-report/
