@@ -931,12 +931,12 @@
           const die = creator(1);
           die.preResult = result;
 
-          // Scatter starting positions above tray — spread out more to avoid overlap
-          const angle = (idx / total) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
-          const r = spread * (0.4 + Math.random() * 0.5) + idx * 0.15;
+          // Scatter starting positions above tray
+          const angle = (idx / total) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
+          const r = spread * (0.3 + Math.random() * 0.5);
           const x = Math.cos(angle) * r;
           const z = Math.sin(angle) * r;
-          const y = 6 + idx * 1.2 + Math.random() * 2;
+          const y = 5 + Math.random() * 3;
 
           die.body.position.set(x, y, z);
           die.body.quaternion.setFromEuler(
