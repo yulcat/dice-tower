@@ -861,12 +861,24 @@
 
       geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvData, 2));
 
-      return numbers.map(n => new THREE.MeshStandardMaterial({
+      // Store computed face normals (indexed by face order)
+      const faceNormals = [];
+      for (let f = 0; f < numFaces; f++) {
+        const start = f * vertsPerFace;
+        const v0 = new THREE.Vector3(pos.getX(start), pos.getY(start), pos.getZ(start));
+        const v1 = new THREE.Vector3(pos.getX(start+1), pos.getY(start+1), pos.getZ(start+1));
+        const v2 = new THREE.Vector3(pos.getX(start+2), pos.getY(start+2), pos.getZ(start+2));
+        const e1 = new THREE.Vector3().subVectors(v1, v0);
+        const e2 = new THREE.Vector3().subVectors(v2, v0);
+        faceNormals.push(new THREE.Vector3().crossVectors(e1, e2).normalize());
+      }
+
+      return { materials: numbers.map(n => new THREE.MeshStandardMaterial({
         map: makeNumberTexture(n, bgHex, textColor),
         roughness: 0.3,
         metalness: 0.1,
         flatShading: true,
-      }));
+      })), faceNormals };
     }
 
     // ============================================================
@@ -910,7 +922,13 @@
         angularDamping: 0.2,
       });
 
-      return { mesh, body, sides: 6 };
+      // Build faceNormals indexed by die value (faceNormals[value-1] = normal)
+      const faceNormals = new Array(6);
+      for (let i = 0; i < 6; i++) {
+        faceNormals[D6_FACE_MAP[i] - 1] = D6_NORMALS[i].clone();
+      }
+
+      return { mesh, body, sides: 6, faceNormals };
     }
 
     // --- Generic polyhedral dice (D4, D8, D12, D20) with numbered faces ---
@@ -926,7 +944,7 @@
 
       // Per-face numbered materials with proper UV mapping
       const numbers = Array.from({ length: sides }, (_, i) => i + 1);
-      const materials = setupFaceMaterials(geo, sides, trisPerFace, numbers, bgHex, colors.text);
+      const { materials, faceNormals } = setupFaceMaterials(geo, sides, trisPerFace, numbers, bgHex, colors.text);
 
       const mesh = new THREE.Mesh(geo, materials);
       mesh.castShadow = true;
@@ -947,7 +965,7 @@
         angularDamping: 0.25,
       });
 
-      return { mesh, body, sides };
+      return { mesh, body, sides, faceNormals };
     }
 
     function createD4(s = 1)  { return createPolyDie(4,  sc => new THREE.TetrahedronGeometry(0.7 * sc, 0),     0.52, s); }
@@ -1005,7 +1023,7 @@
 
       // 10 faces, 2 triangles each — numbered 1-10
       const numbers = Array.from({ length: 10 }, (_, i) => i + 1);
-      const materials = setupFaceMaterials(geo, 10, 2, numbers, bgHex, colors.text);
+      const { materials, faceNormals } = setupFaceMaterials(geo, 10, 2, numbers, bgHex, colors.text);
 
       const mesh = new THREE.Mesh(geo, materials);
       mesh.castShadow = true;
@@ -1050,7 +1068,7 @@
         angularDamping: 0.35,
       });
 
-      return { mesh, body, sides: 10 };
+      return { mesh, body, sides: 10, faceNormals };
     }
 
     const CREATORS = { 4: createD4, 6: createD6, 8: createD8, 10: createD10, 12: createD12, 20: createD20 };
@@ -1176,10 +1194,76 @@
       }
     }
 
-    function onSettled() {
-      isRolling = false;
-      document.getElementById('roll-btn').disabled = false;
+    // ============================================================
+    // Correction rotation animation state
+    // ============================================================
+    const correctionAnims = []; // { die, startQuat, endQuat, startTime, duration }
+    const CORRECTION_DURATION = 350; // ms
+    let correctionDoneCallback = null;
 
+    function startCorrectionRotations(callback) {
+      correctionAnims.length = 0;
+      const now = performance.now();
+      for (const die of activeDice) {
+        if (!die.faceNormals || die.preResult == null) continue;
+        const targetFaceIdx = die.preResult - 1;
+        const localNormal = die.faceNormals[targetFaceIdx];
+        if (!localNormal) continue;
+
+        // Make body static so physics won't interfere
+        die.body.type = CANNON.Body.STATIC;
+        die.body.velocity.setZero();
+        die.body.angularVelocity.setZero();
+
+        // Current world normal of the target face
+        const worldNormal = localNormal.clone().applyQuaternion(die.mesh.quaternion);
+        const up = new THREE.Vector3(0, 1, 0);
+
+        // If already facing up (dot ~1), skip
+        if (worldNormal.dot(up) > 0.999) continue;
+
+        // Compute correction quaternion: rotate worldNormal → up
+        const correctionQuat = new THREE.Quaternion().setFromUnitVectors(worldNormal, up);
+        const startQuat = die.mesh.quaternion.clone();
+        const endQuat = correctionQuat.multiply(startQuat.clone());
+
+        correctionAnims.push({ die, startQuat, endQuat, startTime: now, duration: CORRECTION_DURATION });
+      }
+      correctionDoneCallback = callback;
+      if (correctionAnims.length === 0 && callback) callback();
+    }
+
+    function updateCorrectionAnimations() {
+      if (correctionAnims.length === 0) return;
+      const now = performance.now();
+      let allDone = true;
+      for (const anim of correctionAnims) {
+        let t = (now - anim.startTime) / anim.duration;
+        if (t >= 1) {
+          t = 1;
+        } else {
+          allDone = false;
+        }
+        // Smooth ease-in-out
+        const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        anim.die.mesh.quaternion.slerpQuaternions(anim.startQuat, anim.endQuat, ease);
+        // Sync physics body
+        anim.die.body.quaternion.set(
+          anim.die.mesh.quaternion.x, anim.die.mesh.quaternion.y,
+          anim.die.mesh.quaternion.z, anim.die.mesh.quaternion.w
+        );
+      }
+      if (allDone) {
+        correctionAnims.length = 0;
+        if (correctionDoneCallback) {
+          const cb = correctionDoneCallback;
+          correctionDoneCallback = null;
+          cb();
+        }
+      }
+    }
+
+    function onSettled() {
       const modifier = currentModifier;
 
       // Advantage/Disadvantage logic
@@ -1224,32 +1308,35 @@
         .join(' + ');
       if (advDisNote) groupLabel = advDisNote + groupLabel;
 
-      showResult(total, detailStr, isNat20, isNat1);
+      // Start correction rotation, then show results
+      startCorrectionRotations(() => {
+        showResult(total, detailStr, isNat20, isNat1);
 
-      // Show floating labels on each die
-      activeDice.forEach((die, i) => {
-        const r = preRolledResults[i];
-        if (!r) return;
+        // Show floating labels on each die
+        activeDice.forEach((die, i) => {
+          const r = preRolledResults[i];
+          if (!r) return;
 
-        const labelDiv = document.createElement('div');
-        labelDiv.className = 'die-label';
-        labelDiv.textContent = r.result;
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'die-label';
+          labelDiv.textContent = r.result;
 
-        // Special styling for nat20/nat1
-        if (r.sides === 20 && r.result === 20) labelDiv.classList.add('crit');
-        if (r.sides === 20 && r.result === 1) labelDiv.classList.add('fumble');
+          if (r.sides === 20 && r.result === 20) labelDiv.classList.add('crit');
+          if (r.sides === 20 && r.result === 1) labelDiv.classList.add('fumble');
 
-        const labelObj = new CSS2DObject(labelDiv);
-        labelObj.position.set(0, 0.8, 0); // float above die
-        die.mesh.add(labelObj);
-        floatingLabels.push(labelObj);
+          const labelObj = new CSS2DObject(labelDiv);
+          labelObj.position.set(0, 0.8, 0);
+          die.mesh.add(labelObj);
+          floatingLabels.push(labelObj);
 
-        // Animate in with slight delay per die
-        setTimeout(() => labelDiv.classList.add('visible'), 50 + i * 80);
+          setTimeout(() => labelDiv.classList.add('visible'), 50 + i * 80);
+        });
+
+        if (isNat20 || isNat1) playCritSound(isNat20);
+
+        isRolling = false;
+        document.getElementById('roll-btn').disabled = false;
       });
-
-      // Critical sound
-      if (isNat20 || isNat1) playCritSound(isNat20);
 
       const dStr = buildDiceString();
       historyList.unshift({ total, detail: groupLabel, diceStr: dStr, isNat20, isNat1 });
@@ -1482,6 +1569,7 @@
         d.mesh.quaternion.copy(d.body.quaternion);
       }
       checkSettle();
+      updateCorrectionAnimations();
       controls.update();
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
