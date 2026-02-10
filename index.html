@@ -1132,28 +1132,30 @@
           const die = creator(1);
           die.preResult = result;
 
-          // Scatter starting positions above tray
-          const angle = (idx / total) * Math.PI * 2 + (Math.random() - 0.5) * 0.6;
-          const r = spread * (0.3 + Math.random() * 0.5);
-          const x = Math.cos(angle) * r;
-          const z = Math.sin(angle) * r;
-          const y = 5 + Math.random() * 3;
+          // Throw dice from a random edge — feels like a real roll!
+          const throwAngle = Math.random() * Math.PI * 2;
+          const edgeDist = 5 + Math.random() * 2;
+          const startX = Math.cos(throwAngle) * edgeDist + (Math.random() - 0.5) * spread;
+          const startZ = Math.sin(throwAngle) * edgeDist + (Math.random() - 0.5) * spread;
+          const startY = 2.5 + Math.random() * 2;
 
-          die.body.position.set(x, y, z);
+          die.body.position.set(startX, startY, startZ);
           die.body.quaternion.setFromEuler(
             Math.random() * Math.PI * 2,
             Math.random() * Math.PI * 2,
             Math.random() * Math.PI * 2
           );
+          // Throw toward center with arc
+          const throwSpeed = 4 + Math.random() * 4;
           die.body.velocity.set(
-            (Math.random() - 0.5) * 8,
-            -(1 + Math.random() * 3),
-            (Math.random() - 0.5) * 8
+            -Math.cos(throwAngle) * throwSpeed + (Math.random() - 0.5) * 2,
+            1.5 + Math.random() * 2,
+            -Math.sin(throwAngle) * throwSpeed + (Math.random() - 0.5) * 2
           );
           die.body.angularVelocity.set(
-            (Math.random() - 0.5) * 18,
-            (Math.random() - 0.5) * 18,
-            (Math.random() - 0.5) * 18
+            (Math.random() - 0.5) * 25,
+            (Math.random() - 0.5) * 25,
+            (Math.random() - 0.5) * 25
           );
 
           scene.add(die.mesh);
