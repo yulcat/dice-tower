@@ -1195,84 +1195,40 @@
     }
 
     // ============================================================
-    // Correction rotation animation state
+    // Read top face from physics result
     // ============================================================
-    const correctionAnims = []; // { die, startQuat, endQuat, startTime, duration }
-    const CORRECTION_DURATION = 350; // ms
-    let correctionDoneCallback = null;
-
-    function startCorrectionRotations(callback) {
-      correctionAnims.length = 0;
-      const now = performance.now();
-      for (const die of activeDice) {
-        if (!die.faceNormals || die.preResult == null) continue;
-        const targetFaceIdx = die.preResult - 1;
-        const localNormal = die.faceNormals[targetFaceIdx];
-        if (!localNormal) continue;
-
-        // Make body static so physics won't interfere
-        die.body.type = CANNON.Body.STATIC;
-        die.body.velocity.setZero();
-        die.body.angularVelocity.setZero();
-
-        // Current world normal of the target face
-        const worldNormal = localNormal.clone().applyQuaternion(die.mesh.quaternion);
-        const up = new THREE.Vector3(0, 1, 0);
-
-        // If already facing up (dot ~1), skip
-        if (worldNormal.dot(up) > 0.999) continue;
-
-        // Compute correction quaternion: rotate worldNormal → up
-        const correctionQuat = new THREE.Quaternion().setFromUnitVectors(worldNormal, up);
-        const startQuat = die.mesh.quaternion.clone();
-        const endQuat = correctionQuat.multiply(startQuat.clone());
-
-        correctionAnims.push({ die, startQuat, endQuat, startTime: now, duration: CORRECTION_DURATION });
-      }
-      correctionDoneCallback = callback;
-      if (correctionAnims.length === 0 && callback) callback();
-    }
-
-    function updateCorrectionAnimations() {
-      if (correctionAnims.length === 0) return;
-      const now = performance.now();
-      let allDone = true;
-      for (const anim of correctionAnims) {
-        let t = (now - anim.startTime) / anim.duration;
-        if (t >= 1) {
-          t = 1;
-        } else {
-          allDone = false;
-        }
-        // Smooth ease-in-out
-        const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-        anim.die.mesh.quaternion.slerpQuaternions(anim.startQuat, anim.endQuat, ease);
-        // Sync physics body
-        anim.die.body.quaternion.set(
-          anim.die.mesh.quaternion.x, anim.die.mesh.quaternion.y,
-          anim.die.mesh.quaternion.z, anim.die.mesh.quaternion.w
-        );
-      }
-      if (allDone) {
-        correctionAnims.length = 0;
-        if (correctionDoneCallback) {
-          const cb = correctionDoneCallback;
-          correctionDoneCallback = null;
-          cb();
+    function readTopFace(die) {
+      if (!die.faceNormals) return 1;
+      const up = new THREE.Vector3(0, 1, 0);
+      let bestDot = -Infinity;
+      let bestFace = 0;
+      for (let i = 0; i < die.faceNormals.length; i++) {
+        const worldNormal = die.faceNormals[i].clone().applyQuaternion(die.mesh.quaternion);
+        const dot = worldNormal.dot(up);
+        if (dot > bestDot) {
+          bestDot = dot;
+          bestFace = i + 1; // face numbers are 1-indexed
         }
       }
+      return bestFace;
     }
 
     function onSettled() {
       const modifier = currentModifier;
 
+      // Read actual top face from physics simulation
+      const physicsResults = activeDice.map(die => ({
+        sides: die.sides,
+        result: readTopFace(die)
+      }));
+
       // Advantage/Disadvantage logic
-      let effectiveResults = preRolledResults;
+      let effectiveResults = physicsResults;
       let advDisNote = '';
-      if (rollMode !== 'normal' && preRolledResults.length === 2 &&
-          preRolledResults.every(r => r.sides === 20)) {
-        const r1 = preRolledResults[0].result;
-        const r2 = preRolledResults[1].result;
+      if (rollMode !== 'normal' && physicsResults.length === 2 &&
+          physicsResults.every(r => r.sides === 20)) {
+        const r1 = physicsResults[0].result;
+        const r2 = physicsResults[1].result;
         const chosen = rollMode === 'advantage' ? Math.max(r1, r2) : Math.min(r1, r2);
         const modeLabel = rollMode === 'advantage' ? 'ADV ⬆' : 'DIS ⬇';
         advDisNote = `${modeLabel} (${r1}, ${r2}) → `;
@@ -1287,7 +1243,7 @@
       const isNat1 = isSingleD20 && effectiveResults[0].result === 1;
 
       // Build detail
-      const parts = preRolledResults.map(r => {
+      const parts = physicsResults.map(r => {
         if (r.sides === 20 && r.result === 20) return `<b class="nat20">${r.result}</b>`;
         if (r.sides === 20 && r.result === 1) return `<b class="nat1">${r.result}</b>`;
         return String(r.result);
@@ -1299,7 +1255,7 @@
 
       // Group by die type for label
       const grouped = {};
-      for (const r of preRolledResults) {
+      for (const r of physicsResults) {
         if (!grouped[r.sides]) grouped[r.sides] = [];
         grouped[r.sides].push(r.result);
       }
@@ -1308,35 +1264,32 @@
         .join(' + ');
       if (advDisNote) groupLabel = advDisNote + groupLabel;
 
-      // Start correction rotation, then show results
-      startCorrectionRotations(() => {
-        showResult(total, detailStr, isNat20, isNat1);
+      showResult(total, detailStr, isNat20, isNat1);
 
-        // Show floating labels on each die
-        activeDice.forEach((die, i) => {
-          const r = preRolledResults[i];
-          if (!r) return;
+      // Show floating labels on each die
+      activeDice.forEach((die, i) => {
+        const r = physicsResults[i];
+        if (!r) return;
 
-          const labelDiv = document.createElement('div');
-          labelDiv.className = 'die-label';
-          labelDiv.textContent = r.result;
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'die-label';
+        labelDiv.textContent = r.result;
 
-          if (r.sides === 20 && r.result === 20) labelDiv.classList.add('crit');
-          if (r.sides === 20 && r.result === 1) labelDiv.classList.add('fumble');
+        if (r.sides === 20 && r.result === 20) labelDiv.classList.add('crit');
+        if (r.sides === 20 && r.result === 1) labelDiv.classList.add('fumble');
 
-          const labelObj = new CSS2DObject(labelDiv);
-          labelObj.position.set(0, 0.8, 0);
-          die.mesh.add(labelObj);
-          floatingLabels.push(labelObj);
+        const labelObj = new CSS2DObject(labelDiv);
+        labelObj.position.set(0, 0.8, 0);
+        die.mesh.add(labelObj);
+        floatingLabels.push(labelObj);
 
-          setTimeout(() => labelDiv.classList.add('visible'), 50 + i * 80);
-        });
-
-        if (isNat20 || isNat1) playCritSound(isNat20);
-
-        isRolling = false;
-        document.getElementById('roll-btn').disabled = false;
+        setTimeout(() => labelDiv.classList.add('visible'), 50 + i * 80);
       });
+
+      if (isNat20 || isNat1) playCritSound(isNat20);
+
+      isRolling = false;
+      document.getElementById('roll-btn').disabled = false;
 
       const dStr = buildDiceString();
       historyList.unshift({ total, detail: groupLabel, diceStr: dStr, isNat20, isNat1 });
@@ -1569,7 +1522,6 @@
         d.mesh.quaternion.copy(d.body.quaternion);
       }
       checkSettle();
-      updateCorrectionAnimations();
       controls.update();
       renderer.render(scene, camera);
       labelRenderer.render(scene, camera);
